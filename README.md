@@ -1,7 +1,7 @@
-#🥩 MeatMarketManager 
+<b>🥩 MeatMarketManager</b>
 MeatMarketManager es una solución ligera y eficiente diseñada para carnicerías con múltiples sucursales. Permite un control estricto del stock, gestión de caja (ingresos/egresos) y visualización de datos en tiempo real, todo con una interfaz ultra-sencilla pensada para usuarios finales.
 
-#✨ Características Principales
+<b>✨ Características Principales</b>
 - 🏢 Gestión Multisucursal: Control independiente para "Super Montaña" y "Zona Norte" sin cruce de datos.
 
 - ⚖️ Control de Stock Inteligente: * Validación de ventas: No permite vender más kg de los disponibles.
@@ -16,7 +16,7 @@ MeatMarketManager es una solución ligera y eficiente diseñada para carnicería
 
 - 🔄 Persistencia de Sesión: Sistema de seguridad contra recargas (F5) que mantiene la sucursal activa.
 
-#🛠️ Tecnologías Usadas
+<b>🛠️ Tecnologías Usadas</b>
 - Backend: Python 3.
 
 - Frontend: Streamlit (UI Reactiva).
