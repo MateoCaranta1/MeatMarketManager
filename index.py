@@ -2,44 +2,31 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import difflib
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Carnicería - Control Total", layout="wide")
-LIMITE_ALERTA = 5.0
+st.set_page_config(page_title="Carnicería - Rendimiento por Ventas", layout="wide")
 
-# --- 1. SEGURO CONTRA F5 (MANEJO DE URL) ---
-# Si no hay sucursal definida en la URL, ponemos "Super montaña" por defecto
+# --- 1. SEGURO CONTRA F5 ---
 if "sucursal" not in st.query_params:
     st.query_params["sucursal"] = "Super montaña"
 
-# --- 2. SELECCIÓN DE SUCURSAL (BARRA LATERAL) ---
+# --- 2. SELECCIÓN DE SUCURSAL ---
 with st.sidebar:
     st.header("🏪 Local")
-    
     opciones = ["Super montaña", "Carnicería zona norte"]
-    
-    # Buscamos qué índice tiene la sucursal actual para que el selectbox no se mueva
     try:
         indice_actual = opciones.index(st.query_params["sucursal"])
     except ValueError:
         indice_actual = 0
 
-    sucursal_activa = st.selectbox(
-        "Seleccionar Sucursal", 
-        opciones, 
-        index=indice_actual,
-        key="selector_sucursal"
-    )
+    sucursal_activa = st.selectbox("Seleccionar Sucursal", opciones, index=indice_actual, key="selector_sucursal")
 
-    # Si el usuario cambia el selector, actualizamos la URL y recargamos
     if sucursal_activa != st.query_params["sucursal"]:
         st.query_params["sucursal"] = sucursal_activa
         st.rerun()
 
-    st.warning(f"📍 ESTÁS CARGANDO EN: **{sucursal_activa.upper()}**")
+    st.warning(f"📍 ANALIZANDO: **{sucursal_activa.upper()}**")
     st.markdown("---")
-    st.caption("Los datos corresponden solo a la sucursal seleccionada.")
 
 # --- FUNCIONES DE BASE DE DATOS ---
 def conectar_db():
@@ -48,8 +35,9 @@ def conectar_db():
 def crear_tablas():
     conn = conectar_db()
     c = conn.cursor()
+    # Cambiamos 'vendida' (kgs) por 'recaudado' (dinero total por producto)
     c.execute('''CREATE TABLE IF NOT EXISTS stock 
-                 (producto TEXT, cantidad REAL, sucursal TEXT, 
+                 (producto TEXT, recaudado REAL DEFAULT 0, sucursal TEXT, 
                  PRIMARY KEY (producto, sucursal))''')
     c.execute('''CREATE TABLE IF NOT EXISTS caja 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, 
@@ -59,136 +47,123 @@ def crear_tablas():
 
 crear_tablas()
 
-# --- FUNCIONES DE LÓGICA ---
-def normalizar_nombre(nombre):
-    return nombre.strip().capitalize()
-
-def corregir_nombre(nombre_nuevo, lista_existente):
-    if not lista_existente:
-        return nombre_nuevo
-    coincidencias = difflib.get_close_matches(nombre_nuevo, lista_existente, n=1, cutoff=0.6)
-    return coincidencias[0] if coincidencias else nombre_nuevo
-
-# --- 3. CARGA DE DATOS FILTRADOS ---
+# --- 3. CARGA DE DATOS ---
 conn = conectar_db()
-df_stock = pd.read_sql_query("SELECT * FROM stock WHERE sucursal = ?", conn, params=(sucursal_activa,))
+df_productos = pd.read_sql_query("SELECT * FROM stock WHERE sucursal = ?", conn, params=(sucursal_activa,))
 df_caja = pd.read_sql_query("SELECT * FROM caja WHERE sucursal = ?", conn, params=(sucursal_activa,))
 conn.close()
 
-# --- 4. TÍTULO Y DASHBOARD ---
-st.title(f"🥩 Gestión: {sucursal_activa}")
+# --- 4. DASHBOARD ECONÓMICO ---
+st.title(f"🥩 Rendimiento de Ventas: {sucursal_activa}")
 
-dashboard = st.container()
-with dashboard:
-    total_ingresos = df_caja[df_caja['tipo'] == 'Ingreso']['monto'].sum()
-    total_egresos = df_caja[df_caja['tipo'] == 'Egreso']['monto'].sum()
+total_ingresos = df_caja[df_caja['tipo'] == 'Ingreso']['monto'].sum()
+total_egresos = df_caja[df_caja['tipo'] == 'Egreso']['monto'].sum()
+saldo_caja = total_ingresos - total_egresos
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("💰 Dinero en Caja", f"$ {total_ingresos - total_egresos:,.2f}")
-    m2.metric("📈 Total Ventas", f"$ {total_ingresos:,.2f}")
-    m3.metric("📉 Gastos Totales", f"$ {total_egresos:,.2f}")
-
-    if not df_stock.empty:
-        bajo_stock = df_stock[df_stock['cantidad'] <= LIMITE_ALERTA]
-        for _, fila in bajo_stock.iterrows():
-            st.error(f"⚠️ **{fila['producto']}**: ¡Solo quedan **{fila['cantidad']:.2f} kg**! (Reponer pronto)")
+m1, m2, m3 = st.columns(3)
+m1.metric("💰 Saldo Actual en Caja", f"$ {saldo_caja:,.2f}")
+m2.metric("📈 Total Recaudado", f"$ {total_ingresos:,.2f}")
+m3.metric("📉 Gastos Totales", f"$ {total_egresos:,.2f}")
 
 st.markdown("---")
 
 # --- 5. CUERPO PRINCIPAL ---
-col_izq, col_der = st.columns([1, 1.3])
+col_izq, col_der = st.columns([1, 1.2])
 
 with col_izq:
-    st.subheader("📝 Registrar Movimiento")
-    tab1, tab2, tab3 = st.tabs(["💰 Vender", "🚚 Cargar Stock", "💸 Gastos"])
+    st.subheader("📝 Cargar Operación")
+    tab1, tab2, tab3 = st.tabs(["💰 Venta", "💸 Gasto", "⚙️ Productos"])
 
     with tab1:
-        if not df_stock.empty:
+        if not df_productos.empty:
             with st.form("form_venta", clear_on_submit=True):
-                prod_vender = st.selectbox("¿Qué se vendió?", df_stock['producto'].tolist())
-                kgs_vender = st.number_input("Kilos vendidos", min_value=0.0, step=0.1, format="%.2f")
-                precio_vender = st.number_input("Cobrado ($)", min_value=0.0, format="%.2f")
-            
+                prod_vender = st.selectbox("Corte vendido", df_productos['producto'].tolist())
+                # Pedimos los datos, pero lo que impacta en el ranking es el precio_vender
+                kgs_vender = st.number_input("Kilos vendidos (informativo)", min_value=0.0, step=0.1, format="%.2f")
+                precio_vender = st.number_input("Precio Total Cobrado ($)", min_value=0.0, format="%.2f")
+                
                 if st.form_submit_button("REGISTRAR VENTA"):
-                    stock_disponible = df_stock[df_stock['producto'] == prod_vender]['cantidad'].values[0]
-
-                    if kgs_vender <= 0:
-                        st.warning("⚠️ Ingresá una cantidad válida.")
-                    elif kgs_vender > stock_disponible:
-                        st.error(f"❌ Stock insuficiente en {sucursal_activa}. Solo hay {stock_disponible:.2f} kg.")
-                    else:
+                    if precio_vender > 0:
                         conn = conectar_db(); c = conn.cursor()
-                        c.execute("UPDATE stock SET cantidad = cantidad - ? WHERE producto = ? AND sucursal = ?", 
-                                  (kgs_vender, prod_vender, sucursal_activa))
-                        fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        # Sumamos el monto al acumulado del producto
+                        c.execute("UPDATE stock SET recaudado = recaudado + ? WHERE producto = ? AND sucursal = ?", 
+                                  (precio_vender, prod_vender, sucursal_activa))
+                        # Registramos el movimiento en la caja
                         c.execute("INSERT INTO caja (fecha, tipo, monto, motivo, sucursal) VALUES (?, 'Ingreso', ?, ?, ?)", 
-                                  (fecha, precio_vender, f"Venta {kgs_vender}kg {prod_vender}", sucursal_activa))
+                                  (datetime.now().strftime("%Y-%m-%d %H:%M"), precio_vender, f"Venta {kgs_vender}kg {prod_vender}", sucursal_activa))
                         conn.commit(); conn.close()
-                        st.success(f"✅ Venta registrada en {sucursal_activa}")
+                        st.success(f"✅ Venta de {prod_vender} registrada")
                         st.rerun()
         else:
-            st.info("Primero cargá mercadería para esta sucursal.")
+            st.info("Agregá cortes en la pestaña 'Productos'.")
 
     with tab2:
-        with st.form("form_stock", clear_on_submit=True):
-            st.write(f"Cargando stock para: **{sucursal_activa}**")
-            prod_input = st.text_input("Nombre del corte")
-            cant_input = st.number_input("Kilos que entran", min_value=0.0, step=0.1, format="%.2f")
-            
-            if st.form_submit_button("CARGAR STOCK"):
-                if prod_input and cant_input > 0:
-                    nombre_norm = normalizar_nombre(prod_input)
-                    nombre_final = corregir_nombre(nombre_norm, df_stock['producto'].tolist())
-                    
-                    conn = conectar_db(); c = conn.cursor()
-                    c.execute("""INSERT INTO stock (producto, cantidad, sucursal) VALUES (?, ?, ?) 
-                                 ON CONFLICT(producto, sucursal) DO UPDATE SET cantidad = cantidad + ?""", 
-                              (nombre_final, cant_input, sucursal_activa, cant_input))
-                    conn.commit(); conn.close()
-                    st.success(f"🚚 Stock actualizado en {sucursal_activa}")
-                    st.rerun()
-
-    with tab3:
         with st.form("form_gastos", clear_on_submit=True):
-            monto_g = st.number_input("Monto gasto ($)", min_value=0.0, format="%.2f")
+            monto_g = st.number_input("Monto del gasto ($)", min_value=0.0, format="%.2f")
             motivo_g = st.text_input("¿En qué se gastó?")
-            if st.form_submit_button("GUARDAR GASTO"):
+            if st.form_submit_button("REGISTRAR GASTO"):
                 if monto_g > 0:
                     conn = conectar_db(); c = conn.cursor()
                     c.execute("INSERT INTO caja (fecha, tipo, monto, motivo, sucursal) VALUES (?, 'Egreso', ?, ?, ?)", 
                               (datetime.now().strftime("%Y-%m-%d %H:%M"), monto_g, motivo_g, sucursal_activa))
                     conn.commit(); conn.close()
-                    st.success(f"💸 Gasto registrado en {sucursal_activa}")
+                    st.success("💸 Gasto guardado")
                     st.rerun()
 
-with col_der:
-    st.subheader(f"📊 Stock: {sucursal_activa}")
-    if not df_stock.empty:
-        df_ord = df_stock.sort_values(by='cantidad', ascending=True)
-        
-        def resaltar_bajo(s):
-            return ['background-color: #ff4b4b; color: white' if v <= 5 else '' for v in s]
+    with tab3:
+        st.write("🔧 Configuración de Productos")
+        nuevo_p = st.text_input("Nuevo corte (ej: Vacío)")
+        if st.button("Añadir a la lista"):
+            if nuevo_p:
+                conn = conectar_db(); c = conn.cursor()
+                c.execute("INSERT OR IGNORE INTO stock (producto, recaudado, sucursal) VALUES (?, 0, ?)", 
+                          (nuevo_p.strip().capitalize(), sucursal_activa))
+                conn.commit(); conn.close(); st.rerun()
 
+        if not df_productos.empty:
+            st.divider()
+            prod_sel = st.selectbox("Acción sobre producto", df_productos['producto'].tolist())
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("🔄 Reiniciar Recaudación"):
+                    conn = conectar_db(); c = conn.cursor()
+                    c.execute("UPDATE stock SET recaudado = 0 WHERE producto = ? AND sucursal = ?", (prod_sel, sucursal_activa))
+                    conn.commit(); conn.close(); st.rerun()
+            with col_b2:
+                if st.button("🗑️ Eliminar Producto"):
+                    conn = conectar_db(); c = conn.cursor()
+                    c.execute("DELETE FROM stock WHERE producto = ? AND sucursal = ?", (prod_sel, sucursal_activa))
+                    conn.commit(); conn.close(); st.rerun()
+
+with col_der:
+    st.subheader(f"📊 Ranking por Recaudación ($)")
+    if not df_productos.empty:
+        # Ordenamos por los que más dinero generaron
+        df_ranking = df_productos.sort_values(by='recaudado', ascending=False)
+        
         st.dataframe(
-            df_ord.style.apply(resaltar_bajo, subset=['cantidad']),
-            use_container_width=True, 
-            hide_index=True,
+            df_ranking,
+            use_container_width=True, hide_index=True,
             column_config={
-                "producto": "Producto",
-                "cantidad": st.column_config.NumberColumn("Kgs Disponibles", format="%.2f"),
+                "producto": "Corte de Carne",
+                "recaudado": st.column_config.NumberColumn("Dinero Total Generado ($)", format="$ %.2f"),
                 "sucursal": None
             }
         )
         
         st.write("---")
-        st.caption("Gráfico visual de stock:")
-        st.bar_chart(df_ord.set_index("producto")['cantidad'])
+        # EXPORTACIÓN
+        if st.button("📊 Descargar Reporte Completo (Excel)"):
+            nombre_archivo = f"Cierre_{sucursal_activa}_{datetime.now().strftime('%d-%m-%Y')}.xlsx"
+            with pd.ExcelWriter(nombre_archivo, engine="xlsxwriter") as writer:
+                df_ranking.to_excel(writer, sheet_name="Ranking_Dinero", index=False)
+                df_caja.to_excel(writer, sheet_name="Movimientos_Caja", index=False)
+            with open(nombre_archivo, "rb") as f:
+                st.download_button("📥 Guardar Excel", f, file_name=nombre_archivo)
     else:
-        st.info(f"No hay productos registrados en {sucursal_activa}.")
+        st.info("No hay productos registrados.")
 
-with st.expander(f"🔍 Historial de caja - {sucursal_activa}"):
+# HISTORIAL VISUAL
+with st.expander("🔍 Historial rápido de movimientos"):
     if not df_caja.empty:
-        df_hist = df_caja.sort_values(by='id', ascending=False).head(15)
-        st.dataframe(df_hist.drop(columns=['sucursal']), use_container_width=True, hide_index=True)
-    else:
-        st.write("Sin movimientos aún.")
+        st.table(df_caja.sort_values(by='id', ascending=False).drop(columns=['sucursal']).head(10))
