@@ -26,3 +26,4 @@ MeatMarketManager es una solución ligera y eficiente diseñada para carnicería
 
 - Procesamiento: Pandas (Manejo de DataFrames).
 
+![Sistema](carniceria1.jpg)
